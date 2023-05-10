@@ -1,0 +1,97 @@
+from django.shortcuts import redirect, render
+from django.contrib import messages
+from django.http import HttpResponseRedirect
+from diginxthltadmin.models import subscribers
+from diginxthltadmin import template_path
+from DigiNxtHlt.settings import BASE_DIR
+from diginxthltadmin.config import dummyfolder_uploader
+
+import csv
+import os
+from pathlib import Path
+
+# search blank subscriber and download csv
+def blank_subscriber_search(request):
+    username = request.session["username"]
+    if request.method == 'GET':
+        context = {}
+        context['ListUiAcl'] = request.session['ListUiAcl']
+        context['username'] = username
+        return render(request,template_path.search_BlankSubscriber, context)
+    if request.method == 'POST':
+        try:
+            search_account = request.POST.get('account')
+            
+            # retrieve subscribers with blank name for the given account using the Django ORM
+            subscriber_list = subscribers.objects.filter(name='', account=search_account).values("id", "name", "username", "account", "status") 
+
+            # if there are no matching subscribers, return a warning message
+            if not subscriber_list.exists():
+                messages.warning(request,'No matching result found')
+                return redirect('blank_subscriber_search')                   
+            
+            # build the CSV file content
+            csv_data = []
+            for subscriber in subscriber_list:
+                csv_data.append({'Name': subscriber['name'], 'Username': subscriber['username']})
+
+            context = {}
+            context['ListUiAcl'] = request.session['ListUiAcl']
+            context['username'] = username   
+            context['subscriber_list'] = subscriber_list 
+            context['csv_data'] = csv_data 
+            return render(request, template_path.blank_subscriber_listing, context)
+        except Exception as e:
+            messages.warning(request,str(e))
+            return redirect('blank_subscriber_search')
+
+# upload file
+def uploadFile(request):
+    username = request.session["username"]
+    if request.method == 'GET':
+        context = {}
+        context['ListUiAcl'] = request.session['ListUiAcl']
+        context['username'] = username
+        return render(request,template_path.uploadFIlePath,context)
+    if request.method == 'POST':
+        try:
+            file = request.FILES['file']
+            content_path = Path(BASE_DIR)
+            file_path = content_path / dummyfolder_uploader
+            file_path.mkdir(parents=True, exist_ok=True)
+            file_name, file_extension = os.path.splitext(file.name)
+            replace_extension = file_extension.replace('xlsx', 'csv')
+            file_save_path = file_path / f"{file_name}{replace_extension}"
+            with open(file_save_path, 'wb+') as f:
+                for chunk in file.chunks():
+                    f.write(chunk)
+
+            with open(file_save_path, 'r', encoding='utf8') as csv_file:
+                csv_reader = csv.DictReader(csv_file)
+                rows = list(csv_reader)
+
+            if not rows:
+                messages.warning(request, 'No data is available in the CSV file.')
+            else:
+                # iterate over each row in the CSV file
+                for row in rows:
+                    # access data in each row using column names
+                    column1_data = row['Name']
+                    column2_data = row['Username']
+                    # update data into db
+                    subscribers.objects.filter(username=column2_data).update(name=column1_data)
+                messages.success(request, 'Uploaded successfully.')
+
+            file_save_path.unlink()
+            if not file_save_path.exists():
+                print(f"The file {file_save_path} has been deleted successfully.")
+            else:
+                print(f"Unable to delete the file {file_save_path}.")
+
+            return redirect('uploadFile')
+        except FileNotFoundError:
+            messages.warning(request, 'File path does not exist.')
+            return redirect('uploadFile')
+        except Exception as e:
+            messages.warning(request, str(e))
+            return redirect('uploadFile')
